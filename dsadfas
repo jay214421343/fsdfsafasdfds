@@ -1,0 +1,792 @@
+--------------------------------------------------------------------------------------------------------------------------------------------variables
+local w = game:GetService("Workspace")
+local rep = game:GetService("ReplicatedStorage")
+local ss = game:GetService("ServerStorage")
+local exampleFolder = ss.PlayerInfo.Example:Clone() ss.PlayerInfo.Example:Destroy()
+local ItemInfo = require(rep.ItemInfo)
+local otherinfo = require(rep.OtherInfo)
+local collect = workspace.Map.Collect
+local datastore = game:GetService("DataStoreService"):GetDataStore("GameMainDataStore_v1.5")
+local sett = rep.Settings
+local autosave = sett.AutoSave.Value
+local testing = sett.Testing.Value
+local autosavetime = {5*60,.07*60}
+local playerTables = {}
+local teleporting = {}
+local market = game:GetService("MarketplaceService")
+local rebirthEquation = {.15,100000}--rebirthEquation[1]+(rebirthEquation[2]*(r+1))
+--equation ^^ ([2]+([1]*[2])*rebirths)
+local minigameRunning = false
+
+----start stuff
+workspace.Map.Minigame.Building.FoodSpawnArea.Transparency = 1
+--------------------------------------------------------------------------------------------------------------------------------------------settings
+--------------------------------------------------------------------------------------------------------------------------------------------Data Storing
+local saveOrder = {[1]="Currency";[2]="MaxCook";[3]="Space";[4]="ToCollect";[5]="Cooked";[6]="Rebirths";}
+function Save(player)
+	local folder,pfl = ss.PlayerInfo:FindFirstChild(player.Name),workspace.Players:FindFirstChild(player.Name) if folder and pfl then
+		local key = player.UserId.."_key"
+		local data = {{};{};{};{};{};playerTables[player.UserId];{};{};}
+		
+		for i = 1,#saveOrder do table.insert(data[1],folder[saveOrder[i]].Value) end
+		for i,v in pairs(folder.Tools:GetChildren())do table.insert(data[2],v.Name) end
+		for i,v in pairs(folder.Hats:GetChildren())do table.insert(data[3],v.Name) end
+		for i,v in pairs(folder.Aprons:GetChildren())do table.insert(data[4],v.Name) end
+		for i,v in pairs(folder.RecipesOwned:GetChildren())do table.insert(data[5],{v.Name,v.Value}) end
+		for i,v in pairs(pfl.Kitchen.Areas:GetChildren())do table.insert(data[7],{v.Name,v.Owned.Value}) end
+		for i,v in pairs(folder.Equipped:GetChildren())do table.insert(data[8],{v.Name,v.Value}) end
+		datastore:SetAsync(key,data)
+		warn("Successfully saved ("..player.Name..")'s data!")
+	end
+end
+function maxspace(player,name)
+	local folder,plrinfo = workspace.Players:FindFirstChild(player.Name),ss.PlayerInfo:FindFirstChild(player.Name) if folder and plrinfo then
+		local info = ItemInfo.Items.Aprons[name] if rep.Stuff.Aprons:FindFirstChild(name) and info and plrinfo then
+			 plrinfo.MaxSpace.Value = info[2][2] 
+		end
+	end
+end
+function equipItem(player,class,name)
+	local f local char = player.Character or player.CharacterAdded:Wait()
+	if class == "Hats" then f = rep.Stuff.ChefHats end
+	if class == "Aprons" then f = rep.Stuff.Aprons end
+	if char then
+		for i,v in pairs(char:GetChildren())do
+			if class == "Hats" and v:IsA("Accessory") and f:FindFirstChild(v.Name) then
+				v:Destroy()
+			elseif class == "Aprons" and f:FindFirstChild(v.Name) then
+				v:Destroy()
+			end
+		end
+	end
+	local a = f:FindFirstChild(name) if a then
+		a = a:Clone() a.Parent = char
+		if class == "Aprons" then
+			weld(a,char.UpperTorso,CFrame.new(0,.15,0.09))
+			maxspace(player,name)
+		end
+	end
+end
+function addtool(player,v)
+	if pcall(function()return string.len(v) end) then v = rep.Stuff.Spatulas:FindFirstChild(v) end if v then
+		local folder = ss.PlayerInfo:FindFirstChild(player.Name) if folder and not folder.Tools:FindFirstChild(v.Name) then
+			local t = v:Clone() t.Parent = folder.Tools rep.RemoteEvent:FireClient(player,"AddTool",{v.Name})
+			rep.RemoteEvent:FireClient(player,"ShopThingOwned",{true,v.Name,"Spatulas"})
+		end
+	end
+end
+function additem(player,name,class)
+	local folder = ss.PlayerInfo:FindFirstChild(player.Name) if folder then
+		rep.RemoteEvent:FireClient(player,"ShopThingOwned",{true,name,class})
+		if class == "Hats" then
+			local hat = rep.Stuff.ChefHats:FindFirstChild(name) if hat and not folder.Hats:FindFirstChild(name) then
+				local h = hat:Clone() h.Parent = folder.Hats
+			end
+		elseif class == "Aprons" then
+			local apron = rep.Stuff.Aprons:FindFirstChild(name) if apron and not folder.Aprons:FindFirstChild(name) then
+				local h = apron:Clone() h.Parent = folder.Aprons
+			end
+		end
+	end
+end
+function Load(player)
+	local folder,pfl = ss.PlayerInfo:FindFirstChild(player.Name),workspace.Players:FindFirstChild(player.Name) if folder and pfl then
+		local key = player.UserId.."_key"
+		local data = datastore:GetAsync(key)
+		if data then
+			local stats = data[1]
+			local order = {} for i = 1,#saveOrder do table.insert(order,folder[saveOrder[i]]) end
+			for i,v in pairs(order) do
+				if stats[tonumber(i)] then
+					v.Value = stats[tonumber(i)]
+				end
+			end
+			if data[2] then
+				for i,v in pairs(data[2])do
+					local tool = rep.Stuff.Spatulas:FindFirstChild(v) if tool and not folder.Tools:FindFirstChild(v) then
+						addtool(player,tool)
+					end
+				end
+			end
+			if data[3] then
+				for i,v in pairs(data[3])do
+					additem(player,v,"Hats")
+				end
+			end
+			if data[4] then
+				for i,v in pairs(data[4])do
+					additem(player,v,"Aprons")
+				end
+			end
+			if data[5] then
+				local ro = folder.RecipesOwned
+				for i,v in pairs(data[5])do
+					local name,value = v[1],v[2] local b = ro:FindFirstChild(name) if b then
+						b.Value = value rep.RemoteEvent:FireClient(player,"LockRecipe",{name,value})
+					end
+				end
+			end
+			if data[6] then
+				playerTables[player.UserId][1] = data[6][1]
+			end
+			if data[7] then
+				for i,v in pairs(data[7]) do
+					local name,owned = v[1],v[2] if name and owned then
+						local f = pfl.Kitchen.Areas:FindFirstChild(name) if f then f.Owned.Value = owned end
+					end
+				end
+				playerTables[player.UserId][1] = data[6][1]
+			end
+			if data[8] then
+				for i,v in pairs(data[8])do
+					local name = v[2] local val = folder.Equipped[v[1]] val.Value = name
+					local c = v[1].."s"
+					if val.Value then
+						if c == "Hats" or c == "Aprons" then
+							equipItem(player,c,name)
+						elseif c == "Spatulas" and folder.Tools:FindFirstChild(name) then
+							rep.RemoteEvent:FireClient(player,"AddTool",{name})
+						end
+					end
+				end
+			end
+			warn("Successfully loaded ("..player.Name..")'s data!")
+			Save(player)
+		else
+			warn("No data found for ("..player.Name..")")
+			Save(player)
+		end
+		rep.RemoteEvent:FireClient(player,"AmountCooked",{folder.Cooked.Value})
+	end
+end
+--------------------------------------------------------------------------------------------------------------------------------------------start stuff
+local res = workspace.Map.Restaurant.Kitchen:Clone() workspace.Map.Restaurant.Kitchen:Destroy()
+function placeKitchen(n,bool,a)
+	local function run(k)
+		local function checkOwned(v)
+			local owned = v.Owned.Value
+			local function t(i,bool)
+				for _,v in pairs(v:GetChildren())do
+					if pcall(function()return v.Transparency end) and v.Name ~= "Place" and v.Name ~= "Radius" then
+						v.Transparency = i v.CanCollide = bool
+					end
+				end
+			end
+			if owned then t(0,true) else t(.75,false) end
+		end
+		for i,v in pairs(k.Areas:GetChildren())do
+			local o = v:FindFirstChild("Owned") if o then
+				o.Changed:Connect(function() checkOwned(v) end) checkOwned(v)
+			end
+		end
+	end
+	if bool then
+		a:Destroy()
+		local secondHalf = {[1]=false;[2]=true;[3]=false;[4]=true;[5]=false;[6]=true;[7]=false;[8]=true;
+		[9]=false;[10]=true;[11]=false;[12]=true;[13]=false;[14]=true;[15]=false;[16]=true;}
+		local c = secondHalf[n] == true if c then n = n-1 end
+		local r = res:Clone() r.Name = "Model" r:SetPrimaryPartCFrame(workspace.Map.Restaurant.Inside.Places[n].CFrame)
+		local i = 1 if c then n = n+1 i = 2 end
+		local res = r["Half"..i]:Clone() r:Destroy() res.Name = n res.Parent = workspace.Map.Restaurant
+		run(res)
+	else
+		local r = res:Clone() r.Name = "Model" r.Parent = workspace.Map.Restaurant
+		r:SetPrimaryPartCFrame(workspace.Map.Restaurant.Inside.Places[n].CFrame)
+		for i = 1,2 do
+			if i == 2 then n = tostring(tonumber(n+1)) end
+			local res = r["Half"..i] res.Name = n res.Parent = workspace.Map.Restaurant
+			run(res)
+		end
+	end
+end
+for i,v in pairs(workspace.Map.Restaurant.Inside.Places:GetChildren())do
+	v.Transparency = 1 v.CanCollide = false
+	placeKitchen(v.Name)
+end
+function weld(part,to,cf)
+	if part:IsDescendantOf(workspace) and to:IsDescendantOf(workspace) then
+		local weld = Instance.new("Weld") weld.Parent = part weld.Part0 = part weld.Part1 = to weld.C0 = cf
+	end
+end
+function endgame()
+	minigameRunning = false
+	local m = workspace.Map.Minigame.Building
+	m.Foods:ClearAllChildren()
+	local most = {nil,0}
+	for i,v in pairs(game.Players:GetChildren())do
+		local info = ss.PlayerInfo:FindFirstChild(v.Name) if info then
+			local mf = info.Minigame if mf.Foods.Value > 0 then
+				if mf.Foods.Value > most[2] then most = {v,mf.Foods.Value} end
+				rep.RemoteEvent:FireClient(v,"MinigameEarned",{mf.Foods.Value,mf.Cash.Value})
+				pay(v,mf.Cash.Value) mf.Cash.Value = 0 mf.Foods.Value = 0
+			end
+		end
+	end
+	if most[1] then local winner = ss.PlayerInfo:FindFirstChild(most[1].Name) if winner then
+		local b = Instance.new("BoolValue") b.Name = "WonMinigame" b.Value = true b.Parent = winner
+		rep.RemoteEvent:FireAllClients("MinigameWinner",{most[1].Name})
+		spawn(function() wait(5*60) b:Destroy() end) 
+	end end
+end
+function startminigame()
+	spawn(function()
+		minigameRunning = true
+		local m = workspace.Map.Minigame.Building
+		local foods = 50
+		local function makeFood()
+			if minigameRunning then
+				local food = math.random(1,#ss.Stuff.Foods:GetChildren())
+				for i,v in pairs(ss.Stuff.Foods:GetChildren())do
+					if i == food then
+						if string.lower(v.Name) == "none" then v = ss.Stuff.Foods.Steak end
+						food = v:Clone() break
+					end
+				end
+				if food:IsA("MeshPart") then
+					local x = math.random((m.FoodSpawnArea.Position.X-(m.FoodSpawnArea.Size.X/2))*1000,
+						(m.FoodSpawnArea.Position.X+(m.FoodSpawnArea.Size.X/2))*1000)/1000
+					local z = math.random((m.FoodSpawnArea.Position.Z-(m.FoodSpawnArea.Size.Z/2))*1000,
+						(m.FoodSpawnArea.Position.Z+(m.FoodSpawnArea.Size.Z/2))*1000)/1000
+					local mu = 2 food.Parent = m.Foods food.Size = Vector3.new(food.Size.X*mu,food.Size.Y*mu,food.Size.Z*mu) 
+					food.CFrame = CFrame.new(x,m.FoodSpawnArea.Position.Y-(m.FoodSpawnArea.Size.Y/2)+(food.Size.Y/2),z) food.Anchored = true
+					food.Touched:Connect(function(hit)
+						local player = game.Players:GetPlayerFromCharacter(hit.Parent) if player then
+							local b = false local char = player.Character if char then if char.Humanoid.Health > 0 then b = true end end
+							local info = ss.PlayerInfo:FindFirstChild(player.Name) if info and b then
+								info.Minigame.Cash.Value = info.Minigame.Cash.Value+math.random(15,25)
+								info.Minigame.Foods.Value = info.Minigame.Foods.Value+1
+								rep.RemoteEvent:FireClient(player,"MinigameClick",{})
+								food:Destroy() spawn(function() wait(1) makeFood() end)
+							end
+						end
+					end)
+					spawn(function()
+						local o = 0
+						while food do
+							o = o+1
+							food.CFrame = CFrame.new(food.Position)*CFrame.Angles(0,math.rad(o),0)
+							wait()
+						end
+					end)
+				end
+			end
+		end
+		for i = 1,foods do
+			makeFood()
+		end
+		while minigameRunning do
+			wait(2)
+			for i = 1,10 do
+				if minigameRunning then
+					local des = math.random(1,#ss.Stuff.Foods:GetChildren())
+					for i,v in pairs(m.Foods:GetChildren())do if i == des then v:Destroy() break end end
+					makeFood()
+				else break end
+			end
+		end
+	end)
+end
+function loadRank(player)
+	local char = player.Character
+	local folder = ss.PlayerInfo:FindFirstChild(player.Name) if folder and char then local overhead = char:FindFirstChild("Overhead") if overhead then
+		local rank = ItemInfo.Ranks[1] local cooked = folder.Cooked.Value for i = 1,#ItemInfo.Ranks do
+			local f = ItemInfo.Ranks[i] if cooked >= f[2][1] and cooked <= f[2][2] then rank = f end
+		end
+		local name = rank[1]
+		local info = otherinfo.People.Devs[player.UserId] if info then name = info overhead.Rank.Font = "Fantasy" end
+		overhead.Rank.Text = name if folder.MaxCook.Value ~= rank[3] then folder.MaxCook.Value = rank[3] end
+	end end
+end
+function addinv(char)
+	local torso = char:FindFirstChild("Torso") if not torso then char:WaitForChild("UpperTorso") torso = char:FindFirstChild("UpperTorso") end
+	if not char:FindFirstChild("Inventory") and torso:IsDescendantOf(workspace) then
+		local inv = ss.Stuff.Inventory:Clone() inv.Parent = char
+		weld(inv,torso,CFrame.new(0,-.35,-.8))
+	end
+end
+function teleport(part,pos,player)
+	if pcall(function()return part.CFrame end) and pos then
+		part.CFrame = pos
+		wait(.5)
+		teleporting[player.Name] = nil
+	end
+end
+function givegamepassitems(player)
+	local goldid = otherinfo.Shop.Gamepass[5][1] if market:UserOwnsGamePassAsync(player.UserId,goldid)then
+		addtool(player,"Gold Spatula") additem(player,"Gold Chef","Hats") additem(player,"Gold Apron","Aprons")
+	end
+	local rid = otherinfo.Shop.Gamepass[6][1] if market:UserOwnsGamePassAsync(player.UserId,rid) then
+		addtool(player,"Rainbow Spatula") additem(player,"Rainbow Chef","Hats") additem(player,"Rainbow Apron","Aprons")
+	end
+end
+function rebirth(player)
+	local info,folder = ss.PlayerInfo:FindFirstChild(player.Name),workspace.Players:FindFirstChild(player.Name) if info and folder then
+		local cc = Instance.new("ColorCorrectionEffect") cc.Parent = workspace.CurrentCamera
+		rep.RemoteEvent:FireClient(player,"Fade",{"White",true})
+		info.Currency.Value =  exampleFolder.Currency.Value
+		info.MaxCook.Value =  exampleFolder.MaxCook.Value
+		info.MaxSpace.Value = exampleFolder.MaxSpace.Value
+		info.Space.Value = 0
+		info.ToCollect.Value = 0
+		info.Aprons:ClearAllChildren()
+		info.Hats:ClearAllChildren()
+		for i,v in pairs(info.Equipped:GetChildren())do
+			v.Value = ""
+		end info.Equipped.Spatula.Value = "Stick Spatula"
+		for i,v in pairs(folder.Kitchen.Areas:GetChildren())do
+			if string.sub(v.Name,string.len(v.Name),string.len(v.Name)) ~= "1" then v.Owned.Value = false end
+		end
+		for i,v in pairs(player.Character:GetChildren())do
+			if v:IsA("Tool") or (v:IsA("Accessory") and rep.Stuff.ChefHats:FindFirstChild(v.Name)) or rep.Stuff.Aprons:FindFirstChild(v.Name) then
+				v:Destroy()
+			end
+		end
+		for i,v in pairs(info.RecipesOwned:GetChildren())do
+			local finfo = ItemInfo.Items.Food[v.Name] if finfo then
+				v.Value = not finfo[2][6]
+			end
+		end
+		local s for i,v in pairs(info.Tools:GetChildren())do
+			local finfo = ItemInfo.Items.Spatulas[v.Name] if finfo then finfo = finfo[2]
+				if finfo[4] == false then v:Destroy() else s = v.Name end
+			end
+		end
+		givegamepassitems(player)
+		local r = info.Rebirths.Value
+		rep.RemoteEvent:FireClient(player,"Rebirth",{r,rebirthEquation[2]+(rebirthEquation[1]*rebirthEquation[2])*r,info.CheckChanged.Value})
+		if s then rep.RemoteEvent:FireClient(player,"AddTool",{s}) end
+		wait(3)
+		rep.RemoteEvent:FireClient(player,"Fade",{"White",false})
+	end
+end
+function startTeleport(part,pos,player,name)
+	rep.RemoteEvent:FireClient(player,"Teleporting",{pos,name})
+end
+local plrF = workspace.Players.Example:Clone() workspace.Players.Example:Destroy()
+function changedisplay(player)
+	local f = ss.PlayerInfo:FindFirstChild(player.Name)
+	local red,green = Color3.fromRGB(189, 44, 44),Color3.fromRGB(62, 171, 50)
+	local char = player.Character or player.CharacterAdded:Wait()
+	if char and f then
+		local inv = char:FindFirstChild("Inventory")
+		if not inv then addinv(char) inv = char:FindFirstChild("Inventory") end
+		if inv then
+			inv.Display.Amount.Text = f.Space.Value.."/"..f.MaxSpace.Value
+			local x = f.Space.Value/f.MaxSpace.Value if x>1 then x=1 end inv.Display.Back.Progress.Size = UDim2.new(x,0,1,0)
+			if f.Space.Value >= f.MaxSpace.Value and inv.Display.Back.Progress.BackgroundColor3 ~= red then
+				inv.Display.Back.Progress.BackgroundColor3 = red
+				rep.RemoteEvent:FireClient(player,"FullInv",{true})
+			elseif f.Space.Value < f.MaxSpace.Value and inv.Display.Back.Progress.BackgroundColor3 ~= green then
+				inv.Display.Back.Progress.BackgroundColor3 = green
+				rep.RemoteEvent:FireClient(player,"FullInv",{false})
+			end
+		end
+	end
+end
+local posesTaken = {}
+game.Players.PlayerAdded:Connect(function(player)
+	--playertables[userId] = {{CodesUsed};}
+	local kitchen if playerTables[player.UserId] == nil then playerTables[player.UserId] = {{};} end
+	local f1 = workspace.Players:FindFirstChild(player.Name) if not f1 then
+		f1 = plrF:Clone() f1.Name = player.Name f1.Parent = workspace.Players--folder
+		local n = 1 for i = 1,sett.MaxPlayers.Value do
+			if posesTaken[i] == nil then n = i  break end
+		end posesTaken[n] = player.Name
+		kitchen = workspace.Map.Restaurant:FindFirstChild(n) if kitchen then
+			kitchen.Owner.Value = player.Name kitchen.Parent = f1 kitchen.Name = "Kitchen" kitchen.Display.UI.Username.Text = player.Name
+		end
+	end
+	local f = ss.PlayerInfo:FindFirstChild(player.Name) if not f then
+		f = exampleFolder:Clone() f.Parent = ss.PlayerInfo f.Name = player.Name
+	end
+	f.Currency.Changed:Connect(function()
+		if string.match(tostring(f.Currency.Value),".") then f.Currency.Value = math.floor(f.Currency.Value+.5) end
+		if f.Currency.Value < 0 then f.Currency.Value = 0 end rep.RemoteEvent:FireAllClients("StatChanged",{player.Name,f.Currency.Value})
+	end)
+	for i,v in pairs(rep.Stuff.Spatulas:GetChildren())do
+		if v:FindFirstChild("StarterTool") then addtool(player,v) end
+	end
+	f.Cooked.Changed:Connect(function() loadRank(player) end)
+	f.Space.Changed:Connect(function() changedisplay(player) end)
+	f.MaxSpace.Changed:Connect(function() print(0) changedisplay(player) end)
+	f.Rebirths.Changed:Connect(function() if f.CheckChanged.Value == true then rebirth(player) end end)
+	givegamepassitems(player)
+	local vipid = otherinfo.Shop.Gamepass[7][1] if market:UserOwnsGamePassAsync(player.UserId,vipid)then
+		rep.RemoteEvent:FireClient(player,"Vip",{true})
+	end
+	--local raid = otherinfo.Shop.Gamepass[1][1] if market:UserOwnsGamePassAsync(player.UserId,raid) then
+		rep.RemoteEvent:FireClient(player,"AddTool",{"Radio"})
+	--end
+	
+	rep.RemoteEvent:FireAllClients("PlayersChanged",{"Added",player.Name})
+	
+	local ro = f.RecipesOwned
+	for i,v in pairs(ItemInfo.Items.Food)do
+		local name = i local value = not v[2][6] if not ro:FindFirstChild(name) then
+			local v = Instance.new("BoolValue") v.Value = value v.Name = name v.Parent = ro
+			v.Changed:Connect(function() rep.RemoteEvent:FireClient(player,"LockRecipe",{name,v.Value}) end)
+		end
+	end
+	
+	Load(player)
+	local r = f.Rebirths.Value
+	rep.RemoteEvent:FireClient(player,"Rebirth",{r,rebirthEquation[2]+(rebirthEquation[1]*rebirthEquation[2])*r,f.CheckChanged.Value})
+	if autosave then
+		spawn(function()
+			local w = autosavetime[1] if testing then w = autosavetime[2] end
+			while wait(w) do Save(player) end
+		end)
+	end
+	f.CheckChanged.Value = true
+	local function runpay(msg,plr,cmd,name)
+		if plr then
+			local amount = tonumber(string.sub(msg,string.len("/"..cmd.." "..name)+1,string.len(msg))) if amount then
+				pay(plr,amount)
+			end
+		end
+	end
+	rep.RemoteEvent:FireClient(player,"Areas",{})
+	player.Chatted:Connect(function(msg)
+		if otherinfo.People.Commands[player.UserId] and string.sub(msg,1,1) == "/" and string.len(msg)>1 then
+			local cmd = string.lower(string.match(string.sub(msg,2,string.len(msg)),"%a+"))
+			if cmd == "pay" then
+				local name = string.match(string.sub(msg,string.len("/"..cmd)+1,string.len(msg)),"%a+")
+				if name then
+					local plr = game.Players:FindFirstChild(name) if not plr then
+						if name == "me" then
+							runpay(msg,player,cmd,name)
+						elseif name == "all" then
+							for i,v in pairs(game.Players:GetChildren())do
+								runpay(msg,v,cmd,name)
+							end
+						else
+							for i,v in pairs(game.Players:GetChildren())do
+								if string.lower(string.sub(v.Name,1,string.len(name))) == string.lower(name) then plr = v break end
+								runpay(msg,plr,cmd,name)
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+end)
+game.Players.PlayerRemoving:Connect(function(player)
+	local n for i,v in pairs(posesTaken)do
+		if v == player.Name then n = i posesTaken[i] = nil end
+	end
+	Save(player)
+	rep.RemoteEvent:FireAllClients("PlayersChanged",{"Removed",player.Name})
+	local f = ss.PlayerInfo:FindFirstChild(player.Name) if f then f:Destroy() end
+	local f1 = workspace.Players:FindFirstChild(player.Name) if f1 then
+		placeKitchen(n,true,f1)
+	end
+end)
+game.Close:Connect(function()
+	for i,player in pairs(game.Players:GetChildren())do Save(player) end
+end)
+workspace.ChildAdded:Connect(function(char)
+	local player = game.Players:GetPlayerFromCharacter(char) if player then
+		local folder,plrinfo = workspace.Players:FindFirstChild(player.Name),ss.PlayerInfo:FindFirstChild(player.Name)
+		char.ChildAdded:Connect(function(added)
+			if rep.Stuff.Aprons:FindFirstChild(added.Name) then
+				maxspace(player,added.Name)
+				plrinfo.Equipped.Apron.Value = added.Name
+			elseif rep.Stuff.ChefHats:FindFirstChild(added.Name) then
+				plrinfo.Equipped.Hat.Value = added.Name
+			end
+		end)
+		char.ChildRemoved:Connect(function(removed)
+			local function check(v) if v then if removed.Name == v.Value then v.Value = "" end end end
+			if plrinfo:FindFirstChild("Equipped") and rep.Stuff.Aprons:FindFirstChild(removed.Name) then
+				plrinfo.MaxSpace.Value = 10 for i,v in pairs(char:GetChildren())do
+					if rep.Stuff.Aprons:FindFirstChild(v.Name) then maxspace(player,v.Name) end
+				end
+			end
+		end)
+		
+		for i,v in pairs(plrinfo.Equipped:GetChildren())do
+			local name = v.Value local c = v.Name.."s"
+			if name then
+				if c == "Hats" or c == "Aprons" then
+					equipItem(player,c,name)
+				elseif c == "Spatulas" and plrinfo.Tools:FindFirstChild(name) then
+					rep.RemoteEvent:FireClient(player,"AddTool",{name})
+				end
+			end
+		end
+		rep.RemoteEvent:FireClient(player,"Reset",{})
+		addinv(char) local o = ss.Stuff.Overhead:Clone() o.Parent = char o.Adornee = char.Head o.Username.Text = player.Name
+		changedisplay(player)
+		loadRank(player) char.Humanoid.DisplayDistanceType = "None"
+		rep.RemoteEvent:FireClient(player,"AddTool",{"Radio"}) for i,v in pairs(otherinfo.Shop.Gamepass)do
+			if market:UserOwnsGamePassAsync(player.UserId,v[1]) then
+				local name = v[3]
+				if name == "Run" then
+					local h = char.Humanoid or char:WaitForChild("Humanoid")
+					h.WalkSpeed = 32
+				elseif name == "Vip" then
+					o.Username.Font = "Fantasy"
+				elseif name == "Radio" then
+					rep.RemoteEvent:FireClient(player,"AddTool",{"Radio"})
+				end
+			end
+		end
+	end
+end)
+--------------------------------------------------------------------------------------------------------------------------------------------functions
+function pay(player,amount)
+	local folder = ss.PlayerInfo:FindFirstChild(player.Name) if folder then
+		folder.Currency.Value = folder.Currency.Value+math.abs(amount)
+	end
+end
+function collectcash(player)
+	local char = player.Character
+	local folder = ss.PlayerInfo:FindFirstChild(player.Name) if folder and char then
+		local stat = folder.ToCollect local give = stat.Value local m = 1
+		for i,v in pairs(char:GetChildren())do
+			local name = v.Name local info = ItemInfo.Items.Hats[name] if rep.Stuff.ChefHats:FindFirstChild(name) and info then info = info[2]
+				m = m+(info[2]-1)
+			end
+		end
+		local rebirths = tonumber(folder.Rebirths.Value) local rebirthMultiplier = 1+.1*rebirths
+		give = math.floor(give*m*rebirthMultiplier+.5)
+		local id = otherinfo.Shop.Gamepass[4][1] if market:UserOwnsGamePassAsync(player.UserId,id) then give=give*2 end
+		local id = otherinfo.Shop.Gamepass[7][1] if market:UserOwnsGamePassAsync(player.UserId,id) then give=give*2 end--vip
+		local w = folder:FindFirstChild("WonMinigame") if w then if w.Value == true then give=give*2 end end
+		if give > 0 then
+			pay(player,give) stat.Value = 0
+			folder.Space.Value = 0
+			rep.RemoteEvent:FireClient(player,"Collect",{})
+		end
+	end
+end
+function cookFood(player,name,place)
+	if player and name and place then
+		local model = ss.Stuff.Foods:FindFirstChild(name) if not model then model = ss.Stuff.Foods:FindFirstChild("NONE") end
+		local plrinfo = ss.PlayerInfo:FindFirstChild(player.Name)
+		local folder = workspace.Players:FindFirstChild(player.Name)
+		local info = ItemInfo.Items.Food[name]
+		local char = player.Character
+		local area = place:FindFirstAncestorOfClass("Model")
+		local class = area.Class
+		local gamepass = otherinfo.Shop.Gamepass[2][1]
+		wait()
+		if char and class and area then
+			local spatula = char:FindFirstChildOfClass("Tool")
+			if info and model and folder and place and plrinfo and spatula and area.Owned.Value == true and area.Parent.Parent.Parent == folder then
+				info = info[2] local cooking = #folder.Cooking:GetChildren()
+				local space = plrinfo.Space.Value
+				local sInfo = ItemInfo.Items.Spatulas[spatula.Name]
+				if space+cooking < plrinfo.MaxSpace.Value and plrinfo.MaxCook.Value > cooking and rep.Stuff.Spatulas:FindFirstChild(spatula.Name) and sInfo 
+					and plrinfo.Space.Value < plrinfo.MaxSpace.Value then sInfo = sInfo[2]
+					if class.Value == info[7] then
+						rep.RemoteEvent:FireClient(player,"TargetClickVisible",{true})--make target visible true
+						local u = Instance.new("BoolValue") u.Value = true u.Parent = place u.Name = "Using"
+						local model = model:Clone() model.Parent = folder.Cooking
+						if model:IsA("Model") then
+							model:SetPrimaryPartCFrame(CFrame.new(place.Position+Vector3.new(0,model.PrimaryPart.Size.Y/2,0)))
+						else
+							model.CFrame = CFrame.new(place.Position+Vector3.new(0,model.Size.Y/2,0))
+						end
+						local cooktime,cash,slots = info[2],info[3],info[4]
+						cooktime = cooktime-sInfo[2]
+						if market:UserOwnsGamePassAsync(player.UserId,gamepass) then cooktime = cooktime/2 end
+						if cooktime < .4 then cooktime = .4 end
+						
+						local animInfo = otherinfo.Anims.SpatulaFlip[math.random(1,#otherinfo.Anims.SpatulaFlip)]
+						local animID,name = animInfo[1],animInfo[2]
+						local anim = char.Humanoid:FindFirstChild(name) if not anim then
+							anim = Instance.new("Animation") anim.Name = name anim.Parent = char.Humanoid anim.AnimationId = animID
+						end
+						local track = char.Humanoid:LoadAnimation(anim)
+						track:Play()
+						
+						if class.Value == "Stove" then local smoke = ss.Stuff.Smoke:Clone() smoke.Parent = model end
+						rep.RemoteEvent:FireClient(player,"CookTimer",{cooktime,model,class.Value})
+						wait(cooktime)
+						plrinfo.Cooked.Value = plrinfo.Cooked.Value+1
+						if #folder.Cooking:GetChildren()-1 < 1 then rep.RemoteEvent:FireClient(player,"TargetClickVisible",{false}) end--make target visible false if nothing cooking
+						local multiply = 1 for i,v in pairs(model:GetChildren())do
+							if v:IsA("NumberValue") and string.match(v.Name,"Multiplier") then multiply = multiply+(v.Value-1) end
+						end
+						local cash = math.floor(cash*multiply+.5)
+						plrinfo.Space.Value = plrinfo.Space.Value+1 plrinfo.ToCollect.Value = plrinfo.ToCollect.Value+cash
+						model:Destroy() local u = place:FindFirstChild("Using") if u then u:Destroy() end
+						rep.RemoteEvent:FireClient(player,"AmountCooked",{plrinfo.Cooked.Value})
+					else
+						rep.RemoteEvent:FireClient(player,"WrongCook",{info[7]})
+					end
+				end
+			end
+		end
+	end
+end
+--------------------------------------------------------------------------------------------------------------------------------------------remote event
+rep.RemoteEvent.OnServerEvent:Connect(function(player,call,args)
+	local folder = workspace.Players:FindFirstChild(player.Name)
+	local playerInfo = ss.PlayerInfo:FindFirstChild(player.Name)
+	local char = player.Character
+	if call == "CookFood" then
+		local place for i,v in pairs(args[2]:GetChildren())do
+			if v.Name == "Place" and not v:FindFirstChild("Using") then
+				place = v
+			end
+		end
+		local name = args[1] cookFood(player,name,place)
+	elseif call == "Equipped" then
+		local name = args[1] if rep.Stuff.Spatulas:FindFirstChild(name) then
+			playerInfo.Equipped.Spatula.Value = name
+		end
+	elseif call == "Speed" then
+		if char then
+			if args[1] then
+				char.Humanoid.WalkSpeed = 0
+			else
+				local id = otherinfo.Shop.Gamepass[3][1] if market:UserOwnsGamePassAsync(player.UserId,id) then
+					char.Humanoid.WalkSpeed = 32
+				else
+					char.Humanoid.WalkSpeed = 16
+				end
+			end
+		end
+	elseif call == "EquipItem" then
+		local class,name = args[1],args[2]
+		equipItem(player,class,name)
+	elseif call == "BuyKitchen" then
+		local class,n = args[1],args[2] local info = ItemInfo.Prices[class][n] if info then
+			local cost = info[1] local c=playerInfo.Currency local bought = false
+			if c.Value >= cost then
+				bought = true c.Value = c.Value-cost
+				local area = folder.Kitchen.Areas:FindFirstChild(class..n) if area then
+					area.Owned.Value = true
+				end
+			end
+			rep.RemoteEvent:FireClient(player,"ReturnPurchase",{bought,"Stove",args})
+		end
+	elseif call == "buyFromShop" then
+		local bought = false local name,class = args[1],args[2] local info = ItemInfo.Items[class][name] 
+		if info then
+			local cost = info[2][3] if playerInfo.Currency.Value >= cost then
+				bought = true
+				if class == "Spatulas" then
+					addtool(player,name) local t = char:FindFirstAncestorOfClass("Tool") if t then t:Destroy() end
+				elseif class == "Hats" then
+					local hat = rep.Stuff.ChefHats:FindFirstChild(name) if hat then hat = hat:Clone() hat.Parent = playerInfo.Hats end
+					equipItem(player,class,name)
+				elseif class == "Aprons" then
+					local a = rep.Stuff.Aprons:FindFirstChild(name) if a then a = a:Clone() a.Parent = playerInfo.Aprons end
+					equipItem(player,class,name)
+				end
+				playerInfo.Currency.Value = playerInfo.Currency.Value-cost
+			end
+			rep.RemoteEvent:FireClient(player,"ReturnPurchase",{bought,"Shop",class,name})
+		end
+	elseif call == "Rebirth" then
+		if playerInfo then
+			local r = playerInfo.Rebirths.Value local cost = rebirthEquation[2]+(rebirthEquation[1]*rebirthEquation[2])*r
+			if playerInfo.Currency.Value >= cost then
+				playerInfo.Currency.Value = playerInfo.Currency.Value-cost
+				playerInfo.Rebirths.Value = playerInfo.Rebirths.Value+1
+			else
+				rep.RemoteEvent:FireClient(player,"ReturnPurchase",{false})
+			end
+		end
+	elseif call == "Teleport" then
+		if((args[2] == "Vip" and market:UserOwnsGamePassAsync(player.UserId,otherinfo.Shop.Gamepass[7][1]) ) or args[2] ~= "VIP") then
+			print(2)
+			local pos = args[1] if args[1] == "Sell" then
+				print(3)
+				pos = workspace.Map.SellTP.Position+Vector3.new(0,8,0)
+			end
+			if pcall(function()return pos+Vector3.new(0,0,0) end) then teleport(char.PrimaryPart,CFrame.new(pos),player) end
+		end
+	elseif call == "Code" then
+		local txt = args[1] local info = ItemInfo.Codes[string.lower(txt)] local s = false
+		if info then
+			s = true
+			if playerTables[player.UserId][1][txt] ~= true then
+				if info[2] == "Cash" then
+					pay(player,info[1])
+				elseif info[2] == "Recipe" then
+					local bool = playerInfo.RecipesOwned:FindFirstChild(info[1]) if bool then
+						bool.Value = true
+					end
+				end
+				playerTables[player.UserId][1][txt] = true
+			else
+				s = "Used"
+			end
+		end rep.RemoteEvent:FireClient(player,"ReturnCode",{s,txt})
+	elseif call == "BuyRecipe" then
+		local name = args[1] local info = ItemInfo.Items.Food[name] local bool = playerInfo.RecipesOwned:FindFirstChild(name) local bought = false
+		if info and bool then
+			local cost = info[2][5] if playerInfo.Currency.Value >= cost then
+				playerInfo.Currency.Value = playerInfo.Currency.Value-cost
+				bool.Value = true bought = true
+				rep.RemoteEvent:FireClient(player,"LockRecipe",{name,nil,true})
+			end
+		end rep.RemoteEvent:FireClient(player,"ReturnPurchase",{bought,"Recipe"})
+	elseif call == "TargetClick" then
+		local function checkNum(name)
+			local n = 0 for i,v in pairs(folder.Cooking:GetChildren())do
+				if v.Name == name then n = n+1 end
+			end return n
+		end
+		for i,v in pairs(folder.Cooking:GetChildren())do
+			if checkNum("ClickMultiplier") < 4 then
+				local m = Instance.new("NumberValue") m.Name = "ClickMultiplier" m.Parent = v m.Value = 1.1
+			end
+		end
+	elseif call == "EquipTool" then
+		local name = args[2]
+		for i,v in pairs(char:GetChildren())do if v:IsA("Tool") then v:Destroy() end end
+		if args[1] == true then
+			if name == "Radio" then
+				local tool = rep.Stuff.Radio:Clone() tool.Parent = char
+			else
+				local tool = playerInfo.Tools:FindFirstChild(name) if tool and char then
+					local t = tool:Clone() t.Parent = char
+				end
+			end
+		end
+	end
+end)
+rep.Event.Event:Connect(function(call,args)
+	if call == "Minigame" then
+		if args[1] then wait(15) startminigame() wait(55) endgame() end
+	end
+end)
+--------------------------------------------------------------------------------------------------------------------------------------------purchase
+market.ProcessReceipt = function(info)
+	local player,id = game.Players:GetPlayerByUserId(info.PlayerId),info.ProductId
+	for i,v in pairs(otherinfo.Shop.Cash)do
+		if v[1] == id then
+			if v[3] == "Cash" then
+				pay(player,tonumber(market:GetProductInfo(id,Enum.InfoType.Product).Description))
+			end
+		end
+	end
+	
+	return Enum.ProductPurchaseDecision.PurchaseGranted
+end
+--------------------------------------------------------------------------------------------------------------------------------------------random
+collect.Touched:Connect(function(hit)
+	local player = game.Players:GetPlayerFromCharacter(hit.Parent) if player then
+		local b = false local char = player.Character if char then if char.Humanoid.Health > 0 then b = true end end
+		if b then
+			collectcash(player)
+		end
+	end
+end)
+for i,v in pairs(workspace.Map.Teleporters:GetChildren())do
+	v.Touched:Connect(function(touch)
+		local player = game.Players:GetPlayerFromCharacter(touch.Parent) if player then
+			local b = false local char = player.Character if char then if char.Humanoid.Health > 0 then b = true end end
+			local folder = workspace.Players:FindFirstChild(player.Name) if teleporting[player.Name] ~= true and folder and b then
+				local pos = v.To.Value.Position+Vector3.new(0,8,0)
+				startTeleport(player.Character.PrimaryPart,pos,player,v.Name)
+			end
+		end
+	end)
+end
